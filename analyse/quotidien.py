@@ -17,6 +17,7 @@ Codes de sortie : 0 tout va bien, 1 anomalie signalee, 2 echec bloquant.
 
 from __future__ import annotations
 
+import calendar
 import json
 import os
 import sys
@@ -230,6 +231,43 @@ def evaluer_alertes(gain_total, nb_executions, positions):
     return alertes
 
 
+def heure_de_paris(horodatage=None):
+    """Formate un instant en heure française, avec le repere UTC entre parentheses.
+
+    Toute la machinerie travaille en UTC, et doit y rester : le passage a
+    l'heure d'hiver fin octobre tomberait en plein milieu de l'experience et
+    decalerait toute la serie d'une heure. Mais le rapport est lu par un
+    humain a Paris, a qui une heure UTC ne dit rien.
+
+    Le decalage est calcule sans bibliotheque externe : heure d'ete du dernier
+    dimanche de mars au dernier dimanche d'octobre, heure d'hiver sinon.
+    """
+    t = horodatage if horodatage is not None else time.time()
+    ut = time.gmtime(t)
+
+    def dernier_dimanche(annee, mois):
+        # calendar.weekday calcule reellement le jour de la semaine. Une
+        # premiere version passait par strftime sur un struct_time bricole :
+        # strftime ne recalcule pas le jour, il fait confiance a celui qu'on
+        # lui fournit, et repondait donc toujours "dimanche".
+        jour = calendar.monthrange(annee, mois)[1]
+        while calendar.weekday(annee, mois, jour) != calendar.SUNDAY:
+            jour -= 1
+        return jour
+
+    # La bascule europeenne a lieu a 01h00 UTC, le dernier dimanche du mois.
+    debut_ete = calendar.timegm(
+        (ut.tm_year, 3, dernier_dimanche(ut.tm_year, 3), 1, 0, 0, 0, 0, 0))
+    fin_ete = calendar.timegm(
+        (ut.tm_year, 10, dernier_dimanche(ut.tm_year, 10), 1, 0, 0, 0, 0, 0))
+    decalage = 2 if debut_ete <= t < fin_ete else 1
+
+    local = time.gmtime(t + decalage * 3600)
+    return "%s (%s UTC)" % (
+        time.strftime("%d/%m/%Y à %Hh%M", local),
+        time.strftime("%Hh%M", ut))
+
+
 def _pourcent(x, defaut="-"):
     return defaut if x is None else "%+.2f %%" % (100 * x)
 
@@ -240,7 +278,7 @@ def construire_rapport(resumes, capital, ouvertes, alertes, diagnostic):
     a("# Rapport de l'expérience")
     a("")
     a("_Généré automatiquement le %s. Capital virtuel, aucune transaction réelle._"
-      % maintenant_iso())
+      % heure_de_paris())
     a("")
     a("## Où en est le capital")
     a("")
