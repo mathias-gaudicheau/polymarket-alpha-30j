@@ -270,6 +270,22 @@ def main():
         return 2
     par_id = {m["id"]: m for m in marches}
 
+    # Ou se trouve le volume ? Ce releve oriente le choix des prochaines
+    # references externes : inutile de brancher une source meteo si les
+    # marches meteo sont trois, ou d'ignorer le sport s'il en represente la
+    # moitie. On mesure au lieu de supposer.
+    repartition = {}
+    for m in marches:
+        cle = m.get("categorie") or "inconnu"
+        entree = repartition.setdefault(cle, {"n": 0, "volume24": 0.0})
+        entree["n"] += 1
+        entree["volume24"] += m.get("volume24") or 0.0
+    classement = sorted(repartition.items(),
+                        key=lambda kv: -kv[1]["volume24"])
+    note("repartition par categorie (marches, volume 24 h) : %s"
+         % ", ".join("%s %d/%.0f k$" % (c, v["n"], v["volume24"] / 1000.0)
+                     for c, v in classement[:9]))
+
     # 2. Signaux du cycle precedent, executes contre les carnets d'aujourd'hui
     attente = lire_attente()
     note("signaux en attente du cycle precedent : %d" % len(attente))
