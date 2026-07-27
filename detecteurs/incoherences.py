@@ -179,30 +179,58 @@ def paniers_negrisk(evenements, journal=None) -> tuple:
 # Detecteur 3 : les echelles de seuils doivent etre monotones
 # --------------------------------------------------------------------------
 
-_SENS_CROISSANT = re.compile(
-    r"\b(above|over|at least|or more|greater than|higher than|exceed|≥|>=|>)\b",
+_BORNE_HAUTE = re.compile(
+    r"^\s*(?:above|over|at least|more than|greater than|higher than|≥|>=|>)\s*[\d$€.,]",
     re.IGNORECASE)
-_SENS_DECROISSANT = re.compile(
-    r"\b(below|under|at most|or less|less than|lower than|≤|<=|<)\b",
+_BORNE_BASSE = re.compile(
+    r"^\s*(?:below|under|at most|less than|lower than|fewer than|≤|<=|<)\s*[\d$€.,]",
     re.IGNORECASE)
+# Une tranche : "1T-1.25T", "25k-100k", "100–110", "$1M to $2M".
+_TRANCHE = re.compile(
+    r"[\d.]+\s*[a-z$€%]*\s*(?:-|–|—|to|a)\s*[\d.]+", re.IGNORECASE)
+
+
+def classer_groupe(marches) -> str:
+    """Distingue une echelle cumulative d'une partition en tranches.
+
+    La difference est decisive et m'a d'abord echappe. Sur une echelle
+    cumulative -- "au-dessus de 100", "au-dessus de 110" -- les evenements
+    s'emboitent et la probabilite doit decroitre : une violation est un
+    arbitrage. Sur une partition en tranches disjointes -- "1T a 1,25T",
+    "1,25T a 1,5T" -- les evenements s'excluent, aucune monotonie ne
+    s'applique, et la distribution peut avoir n'importe quelle forme. Une
+    tranche centrale y vaut legitimement plus qu'une tranche basse.
+
+    Confondre les deux fabrique des arbitrages imaginaires. On exige donc que
+    *tous* les libelles d'un groupe portent la meme forme, et on s'abstient
+    au moindre doute.
+    """
+    titres = [str(m.get("groupe_titre") or "").strip() for m in marches]
+    titres = [t for t in titres if t]
+    if len(titres) < 2:
+        return "inconnu"
+
+    tranches = sum(1 for t in titres if _TRANCHE.search(t))
+    if tranches:
+        # Un seul libelle en forme de tranche suffit a trahir une partition.
+        return "partition"
+
+    hautes = sum(1 for t in titres if _BORNE_HAUTE.match(t))
+    basses = sum(1 for t in titres if _BORNE_BASSE.match(t))
+
+    if hautes == len(titres):
+        return "cumulatif_au_dessus"
+    if basses == len(titres):
+        return "cumulatif_en_dessous"
+    return "inconnu"
 
 
 def _sens_echelle(marches) -> str | None:
-    """Determine si le seuil se lit 'au-dessus de' ou 'en dessous de'.
-
-    En cas d'ambiguite on renvoie None et l'echelle est ignoree : se tromper
-    de sens transformerait un arbitrage en pari a l'envers.
-    """
-    croissants = decroissants = 0
-    for m in marches:
-        texte = " ".join(str(m.get(c) or "") for c in ("groupe_titre", "question"))
-        if _SENS_CROISSANT.search(texte):
-            croissants += 1
-        if _SENS_DECROISSANT.search(texte):
-            decroissants += 1
-    if croissants and not decroissants:
+    """Sens de lecture d'une echelle, uniquement si elle est bien cumulative."""
+    classe = classer_groupe(marches)
+    if classe == "cumulatif_au_dessus":
         return "au_dessus"
-    if decroissants and not croissants:
+    if classe == "cumulatif_en_dessous":
         return "en_dessous"
     return None
 
