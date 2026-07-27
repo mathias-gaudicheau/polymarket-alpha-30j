@@ -109,6 +109,11 @@ def positions_depuis_executions(executions):
                 "frais": j.get("frais") or 0.0,
                 "mise": parts * prix + (j.get("frais") or 0.0),
                 "t_execution": e.get("t_execution"),
+                # Latence reellement subie entre le signal et son execution.
+                # GitHub honore les planifications au mieux, pas a la minute :
+                # mieux vaut mesurer ce delai que le supposer de cinq minutes.
+                "latence": ((e.get("t_execution") or 0) - (e.get("t_signal") or 0)
+                            if e.get("t_signal") else None),
                 "gain": None,
                 "denouee": False,
             })
@@ -317,12 +322,25 @@ def main():
         alertes.append({"gravite": "ALERTE",
                         "sujet": "aucune execution consignee, la collecte est-elle vivante"})
 
+    latences = sorted(p["latence"] for p in positions
+                      if p.get("latence") is not None and p["latence"] > 0)
     diagnostic = {
         "executions lues": len(executions),
         "positions ouvertes": ouvertes,
         "positions denouees": len(denouees),
         "temoins denoues": len(temoins),
     }
+    if latences:
+        mediane = latences[len(latences) // 2]
+        diagnostic["latence mediane signal vers execution"] = (
+            "%d s (min %d, max %d) — mesuree, non supposee"
+            % (mediane, latences[0], latences[-1]))
+        if mediane > 900:
+            alertes.append({
+                "gravite": "ALERTE",
+                "sujet": "latence mediane de %d s : la planification GitHub prend "
+                         "du retard, les occasions courtes deviennent hors "
+                         "d'atteinte" % mediane})
 
     rapport = construire_rapport(resumes, capital, ouvertes, alertes, diagnostic)
     with open(os.path.join(RACINE, "RAPPORT.md"), "w", encoding="utf-8") as f:
