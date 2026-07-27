@@ -15,5 +15,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Detecteurs et moteur
+      - name: Detecteurs et moteur d execution
         run: python tests/test_detecteurs.py
+
+      - name: Moteur de decouverte
+        run: python tests/test_fouille.py
