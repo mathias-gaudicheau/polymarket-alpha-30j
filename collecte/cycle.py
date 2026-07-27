@@ -131,6 +131,25 @@ def executer_en_attente(attente, par_id):
         toutes_remplies = True
         net_total, frais_total = 0.0, 0.0
 
+        # Un arbitrage se dimensionne sur sa jambe la plus etroite. On sonde
+        # donc d'abord la profondeur disponible partout, et on retient le
+        # minimum : prendre plus sur une jambe que ce que l'autre peut suivre
+        # laisserait un reliquat nu, qui n'est plus un arbitrage mais un pari.
+        parts_visees = s.get("parts_visees") or parts_pour_budget(s["jambes"])
+        if s.get("tout_ou_rien"):
+            plafonds = []
+            for jambe in s.get("jambes", []):
+                carnet = carnets.get(jambe["jeton"])
+                if carnet is None:
+                    plafonds.append(0.0)
+                    continue
+                limite = (jambe["prix"] * 1.03 if jambe["sens"] == "achat"
+                          else jambe["prix"] * 0.97)
+                plafonds.append(carnet.parts_disponibles(jambe["sens"], limite))
+            if plafonds:
+                parts_visees = min(parts_visees, min(plafonds))
+            resultat["parts_visees_ajustees"] = round(parts_visees, 2)
+
         for jambe in s.get("jambes", []):
             carnet = carnets.get(jambe["jeton"])
             if carnet is None or not carnet.est_exploitable():
@@ -139,10 +158,6 @@ def executer_en_attente(attente, par_id):
                     "jeton": jambe["jeton"], "rempli": False,
                     "motif": "carnet absent ou inexploitable"})
                 continue
-
-            # Toutes les jambes visent le meme nombre de parts : c'est ce qui
-            # fait qu'un panier se compense au denouement.
-            parts_visees = s.get("parts_visees") or parts_pour_budget(s["jambes"])
             # Refus d'aller chercher un prix nettement pire que celui vu :
             # au-dela, l'occasion a disparu et la poursuivre serait la subir.
             limite = (jambe["prix"] * 1.03 if jambe["sens"] == "achat"

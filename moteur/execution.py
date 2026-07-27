@@ -106,6 +106,25 @@ class Carnet:
         return bool(self.achats and self.ventes and self.ecart is not None
                     and self.ecart < 0.5)
 
+    def parts_disponibles(self, cote, prix_limite=None):
+        """Combien de parts on peut obtenir sans depasser un prix donne.
+
+        Sert a dimensionner un arbitrage sur sa jambe la plus etroite : un
+        operateur reel ne prend pas cinq cents parts d'un cote et deux cents
+        de l'autre, il se cale sur le maillon faible. Ne pas le faire laisse
+        un reliquat nu qui n'a plus rien d'un arbitrage.
+        """
+        niveaux = self.ventes if cote == "achat" else self.achats
+        total = 0.0
+        for prix, taille in niveaux:
+            if prix_limite is not None:
+                if cote == "achat" and prix > prix_limite:
+                    break
+                if cote == "vente" and prix < prix_limite:
+                    break
+            total += taille
+        return total
+
 
 class Remplissage:
     """Resultat d'une tentative d'execution."""
