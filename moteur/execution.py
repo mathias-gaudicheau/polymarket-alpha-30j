@@ -136,15 +136,29 @@ class Remplissage:
                    ", borne" if self.borne_par_profondeur else ""))
 
 
-def executer_preneur(carnet: Carnet, cote: str, montant_vise: float,
-                     categorie: str, prix_maximal=None) -> Remplissage:
+def executer_preneur(carnet: Carnet, cote: str, montant_vise=None,
+                     categorie: str = "inconnu", prix_maximal=None,
+                     parts_visees=None, taux_frais=None) -> Remplissage:
     """Ordre au marche : on traverse le carnet et on paie ce qu'il en coute.
 
     cote          'achat' pour acquerir des parts, 'vente' pour en ceder
-    montant_vise  en dollars ; la taille reelle sera bornee par la profondeur
-    prix_maximal  refus d'aller au-dela (protection contre un carnet vide)
+    montant_vise  cible exprimee en dollars
+    parts_visees  cible exprimee en parts ; prioritaire sur le montant
+
+    La distinction entre les deux cibles n'est pas cosmetique. Un arbitrage de
+    panier exige le meme nombre de parts sur chaque jambe : acheter dix
+    dollars d'un jeton a trois centimes et dix dollars d'un jeton a
+    quatre-vingt-quinze centimes ne donne pas un arbitrage mais deux paris
+    directionnels sans rapport, dont les frais explosent du cote bon marche.
+
+    prix_maximal  refus d'aller au-dela (l'occasion a disparu, on ne la subit pas)
+    taux_frais    taux reel du marche ; a defaut, deduit de la categorie
     """
-    if montant_vise <= 0:
+    if parts_visees is None and montant_vise is None:
+        return Remplissage(motif="aucune cible")
+    if parts_visees is not None and parts_visees <= 0:
+        return Remplissage(motif="cible en parts nulle")
+    if parts_visees is None and montant_vise <= 0:
         return Remplissage(motif="montant nul")
 
     niveaux = carnet.ventes if cote == "achat" else carnet.achats
@@ -159,17 +173,31 @@ def executer_preneur(carnet: Carnet, cote: str, montant_vise: float,
                 break
             if cote == "vente" and prix < prix_maximal:
                 break
-        restant = montant_vise - cout
-        if restant <= 1e-9:
-            borne = False
-            break
-        parts_ici = min(taille, restant / prix)
+
+        if parts_visees is not None:
+            restant_parts = parts_visees - parts
+            if restant_parts <= 1e-9:
+                borne = False
+                break
+            parts_ici = min(taille, restant_parts)
+        else:
+            restant = montant_vise - cout
+            if restant <= 1e-9:
+                borne = False
+                break
+            parts_ici = min(taille, restant / prix)
+
         if parts_ici <= 0:
             continue
         parts += parts_ici
         cout += parts_ici * prix
         traverses += 1
-        if cout >= montant_vise - 1e-9:
+
+        if parts_visees is not None:
+            if parts >= parts_visees - 1e-9:
+                borne = False
+                break
+        elif cout >= montant_vise - 1e-9:
             borne = False
             break
 
@@ -177,7 +205,10 @@ def executer_preneur(carnet: Carnet, cote: str, montant_vise: float,
         return Remplissage(motif="profondeur insuffisante (%.2f parts)" % parts)
 
     prix_moyen = cout / parts
-    f = mf.frais_preneur(parts, prix_moyen, categorie)
+    if taux_frais is not None:
+        f = abs(parts) * taux_frais * prix_moyen * (1.0 - prix_moyen)
+    else:
+        f = mf.frais_preneur(parts, prix_moyen, categorie)
 
     # A l'achat on debourse le cout plus les frais ; a la vente on encaisse moins les frais.
     net = -(cout + f) if cote == "achat" else (cout - f)

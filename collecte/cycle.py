@@ -37,9 +37,23 @@ FICHIER_ATTENTE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "journal", "en_attente.json")
 
-# Montant de reference pour dimensionner un essai. Le portefeuille reel
-# affinera au travail quotidien ; ici on mesure surtout la faisabilite.
-MONTANT_ESSAI = 10.0
+# Budget de reference d'un signal, toutes jambes confondues. Le portefeuille
+# reel affinera au travail quotidien ; ici on mesure surtout la faisabilite.
+BUDGET_ESSAI = 20.0
+
+
+def parts_pour_budget(jambes, budget=BUDGET_ESSAI):
+    """Combien de parts acheter sur chaque jambe pour respecter le budget.
+
+    Un arbitrage se dimensionne en parts identiques sur toutes les jambes,
+    jamais en montants identiques : c'est le nombre de parts qui se compense
+    au denouement. Le cout d'un lot complet vaut la somme des prix ; le budget
+    divise par cette somme donne le nombre de lots finançables.
+    """
+    cout_du_lot = sum(j["prix"] for j in jambes if j["sens"] == "achat")
+    if cout_du_lot <= 0:
+        return 0.0
+    return budget / cout_du_lot
 
 
 def note(message):
@@ -126,14 +140,18 @@ def executer_en_attente(attente, par_id):
                     "motif": "carnet absent ou inexploitable"})
                 continue
 
-            montant = s.get("montant_par_jambe") or MONTANT_ESSAI
+            # Toutes les jambes visent le meme nombre de parts : c'est ce qui
+            # fait qu'un panier se compense au denouement.
+            parts_visees = s.get("parts_visees") or parts_pour_budget(s["jambes"])
             # Refus d'aller chercher un prix nettement pire que celui vu :
             # au-dela, l'occasion a disparu et la poursuivre serait la subir.
             limite = (jambe["prix"] * 1.03 if jambe["sens"] == "achat"
                       else jambe["prix"] * 0.97)
-            rem = executer_preneur(carnet, jambe["sens"], montant,
-                                   jambe.get("categorie", "inconnu"),
-                                   prix_maximal=limite)
+            rem = executer_preneur(carnet, jambe["sens"],
+                                   categorie=jambe.get("categorie", "inconnu"),
+                                   prix_maximal=limite,
+                                   parts_visees=parts_visees,
+                                   taux_frais=jambe.get("taux_frais"))
             if not rem.rempli:
                 toutes_remplies = False
             else:
@@ -158,6 +176,21 @@ def executer_en_attente(attente, par_id):
         resultat["frais"] = round(frais_total, 5)
         if not resultat["realisee"]:
             resultat["motif_echec"] = "jambe(s) non remplie(s)"
+
+        # Pour un panier exhaustif, exactement une jambe vaut 1 $ au
+        # denouement. Le gain se calcule donc sans rien prevoir : c'est le
+        # nombre de parts du lot, moins ce qu'il a coute.
+        if s.get("tout_ou_rien") and resultat["realisee"]:
+            remplies = [j for j in resultat["jambes"] if j["rempli"]]
+            if remplies:
+                lot = min(j["parts"] for j in remplies)
+                depense = -net_total          # net_total est negatif a l'achat
+                resultat["gain_certain"] = round(lot - depense, 4)
+                resultat["rendement"] = (round((lot - depense) / depense, 5)
+                                         if depense > 0 else None)
+                resultat["parts_du_lot"] = round(lot, 2)
+                resultat["desequilibre_parts"] = round(
+                    max(j["parts"] for j in remplies) - lot, 2)
         executions.append(resultat)
 
     realisees = sum(1 for e in executions if e["realisee"])
@@ -191,7 +224,7 @@ def fabriquer_temoin(signal_dict, univers, tirage):
         "avantage": 0.0,
         "tout_ou_rien": False,
         "marche_pivot": choisis[0]["id"],
-        "montant_par_jambe": signal_dict.get("montant_par_jambe", MONTANT_ESSAI),
+        "parts_visees": signal_dict.get("parts_visees"),
         "explication": "Pari temoin tire au hasard, jumeau d'un signal %s."
                        % signal_dict.get("strategie"),
         "jambes": [{
@@ -247,7 +280,7 @@ def main():
     for s in signaux:
         enr = s.en_dict()
         enr["t"] = horodatage
-        enr["montant_par_jambe"] = MONTANT_ESSAI
+        enr["parts_visees"] = round(parts_pour_budget(enr["jambes"]), 3)
         nouvelle_attente.append(enr)
         temoin = fabriquer_temoin(enr, marches, tirage)
         if temoin:
@@ -277,6 +310,20 @@ def main():
           % (len(signaux), len(nouvelle_attente) - len(signaux)))
     print("  executions         : %d realisees sur %d"
           % (diag_exec.get("realisees", 0), diag_exec["nb"]))
+
+    gains = [e["gain_certain"] for e in executions
+             if e.get("gain_certain") is not None and not e["temoin"]]
+    if gains:
+        gagnants = sum(1 for g in gains if g > 0)
+        print("  arbitrages soldes  : %d, dont %d positifs apres frais"
+              % (len(gains), gagnants))
+        print("  gain garanti moyen : %+.4f $ pour %.0f $ engages"
+              % (sum(gains) / len(gains), BUDGET_ESSAI))
+        desequilibres = [e.get("desequilibre_parts", 0) for e in executions
+                         if e.get("desequilibre_parts") is not None]
+        if desequilibres and max(desequilibres) > 0.5:
+            print("  ATTENTION : desequilibre de parts jusqu'a %.1f entre jambes"
+                  % max(desequilibres))
     print("  journal cumule     : %.1f Mo en %d fichiers"
           % (poids["mo"], poids["fichiers"]))
     print("  duree              : %.1f s" % duree)

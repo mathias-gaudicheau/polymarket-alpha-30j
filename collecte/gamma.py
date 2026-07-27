@@ -65,11 +65,16 @@ def _taux_de_frais(brut: dict, categorie: str) -> tuple:
     return mf.taux_de(categorie), "table_categorie"
 
 
-def normaliser(brut: dict) -> dict | None:
+def normaliser(brut: dict, evenement=None) -> dict | None:
     """Transforme un marche Gamma en enregistrement exploitable.
 
     Renvoie None si le marche n'est pas negociable : sans carnet ni jetons,
     il n'y a rien a simuler.
+
+    L'evenement porteur est passe explicitement quand on pagine sur /events :
+    c'est lui qui detient les etiquettes, et donc le taux de frais applicable.
+    La pagination sur /markets ne les fournit pas, ce qui faisait tomber tous
+    les marches dans la categorie inconnue et donc au taux le plus cher.
     """
     jetons = _json_ou_liste(brut.get("clobTokenIds"))
     if len(jetons) < 2 or not brut.get("enableOrderBook"):
@@ -78,8 +83,10 @@ def normaliser(brut: dict) -> dict | None:
     issues = _json_ou_liste(brut.get("outcomes"))
     prix_issues = [_flottant(p) for p in _json_ou_liste(brut.get("outcomePrices"))]
 
-    evenements = brut.get("events") or []
-    ev = evenements[0] if evenements else {}
+    ev = evenement
+    if ev is None:
+        evenements = brut.get("events") or []
+        ev = evenements[0] if evenements else {}
     etiquettes = ev.get("tags") or []
     categorie = mf.categoriser(etiquettes)
     taux, source_taux = _taux_de_frais(brut, categorie)
@@ -131,13 +138,21 @@ def normaliser(brut: dict) -> dict | None:
 
 
 def lire_univers(inclure_clos=False, journal=None) -> tuple:
-    """Pagine l'integralite des marches et renvoie (marches, diagnostic)."""
+    """Pagine l'integralite de l'univers et renvoie (marches, diagnostic).
+
+    On pagine sur /events plutot que sur /markets : un evenement porte a la
+    fois ses marches et ses etiquettes, ce qui donne en une seule passe la
+    cotation et la categorie de frais. Paginer sur /markets prive de ces
+    etiquettes et fait facturer tout l'univers au taux le plus cher, ce qui
+    condamnerait a tort la quasi-totalite des occasions.
+    """
     marches, decalage, pages = [], 0, 0
     rejetes_sans_carnet = 0
     echecs = []
+    evenements_lus = 0
 
     while pages < PLAFOND_PAGES:
-        rep = http_json(GAMMA + "/markets", {
+        rep = http_json(GAMMA + "/events", {
             "closed": "true" if inclure_clos else "false",
             "limit": PAS_PAGE,
             "offset": decalage,
@@ -155,29 +170,46 @@ def lire_univers(inclure_clos=False, journal=None) -> tuple:
         if not isinstance(rep.donnees, list) or not rep.donnees:
             break
 
-        for brut in rep.donnees:
-            enr = normaliser(brut)
-            if enr is None:
-                rejetes_sans_carnet += 1
-            else:
-                marches.append(enr)
+        for ev in rep.donnees:
+            evenements_lus += 1
+            for brut in ev.get("markets") or []:
+                enr = normaliser(brut, evenement=ev)
+                if enr is None:
+                    rejetes_sans_carnet += 1
+                else:
+                    marches.append(enr)
 
         pages += 1
         if len(rep.donnees) < PAS_PAGE:
             break
         decalage += PAS_PAGE
 
+    # Un marche peut apparaitre dans deux evenements : on ne le garde qu'une fois.
+    vus, uniques = set(), []
+    for m in marches:
+        if m["id"] in vus:
+            continue
+        vus.add(m["id"])
+        uniques.append(m)
+
+    connues = sum(1 for m in uniques if m["categorie"] != "inconnu")
     diagnostic = {
         "pages_lues": pages,
-        "marches_retenus": len(marches),
+        "evenements_lus": evenements_lus,
+        "marches_retenus": len(uniques),
+        "doublons_ecartes": len(marches) - len(uniques),
         "rejetes_sans_carnet": rejetes_sans_carnet,
+        "categorie_resolue": connues,
+        "taux_categorie_resolue": round(connues / max(1, len(uniques)), 3),
         "echecs": echecs,
         "pagination_tronquee": pages >= PLAFOND_PAGES,
     }
     if journal:
-        journal("univers : %d marches retenus, %d ecartes, %d pages, %d echec(s)"
-                % (len(marches), rejetes_sans_carnet, pages, len(echecs)))
-    return marches, diagnostic
+        journal("univers : %d marches sur %d evenements, %d ecartes, "
+                "categorie resolue pour %d (%.0f%%)"
+                % (len(uniques), evenements_lus, rejetes_sans_carnet,
+                   connues, 100 * diagnostic["taux_categorie_resolue"]))
+    return uniques, diagnostic
 
 
 def grouper_par_evenement(marches) -> dict:
