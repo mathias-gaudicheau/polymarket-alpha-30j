@@ -1,6 +1,6 @@
 # Rapport de l'expérience
 
-_Généré automatiquement le 2026-07-27T16:32:50Z. Capital virtuel, aucune transaction réelle._
+_Généré automatiquement le 2026-07-27T16:34:14Z. Capital virtuel, aucune transaction réelle._
 
 ## Où en est le capital
 
@@ -9,7 +9,7 @@ _Généré automatiquement le 2026-07-27T16:32:50Z. Capital virtuel, aucune tran
 | Capital de départ | 500.00 $ |
 | Capital actuel | 500.00 $ |
 | Résultat cumulé | +0.00 $ (+0.00 %) |
-| Positions encore ouvertes | 1785 |
+| Positions encore ouvertes | 0 |
 | Jour de l'expérience | 1 sur 30 |
 
 ## Ce que vaut chaque stratégie
@@ -26,7 +26,7 @@ qui aurait l'air d'en être un.
 
 - executions lues : 646
 - positions denouees : 0
-- positions ouvertes : 1785
+- positions ouvertes : 0
 - temoins denoues : 0
 
 ---
