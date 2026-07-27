@@ -1,0 +1,62 @@
+name: Travail quotidien
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Quatre fois par jour, a des minutes non rondes. La base Neon s'endort
+    # apres cinq minutes sans requete : quatre reveils coutent une vingtaine
+    # de minutes de calcul par jour, contre 24 heures si on l'interrogeait a
+    # chaque cycle de collecte.
+    - cron: "13 3,9,15,21 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: quotidien
+  cancel-in-progress: false
+
+jobs:
+  bilan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Denouements, comptabilite, rapport
+        id: bilan
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python analyse/quotidien.py
+        continue-on-error: true
+
+      - name: Consigner le rapport
+        run: |
+          git config user.name  "analyste"
+          git config user.email "analyste@users.noreply.github.com"
+          git add RAPPORT.md journal/ 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "rien a consigner"
+            exit 0
+          fi
+          git commit -q -m "rapport $(date -u '+%Y-%m-%d %H:%M') UTC"
+          for essai in 1 2 3 4 5; do
+            if git push -q origin HEAD:main 2>/dev/null; then
+              echo "consigne (essai $essai)"
+              exit 0
+            fi
+            git pull --rebase -q origin main || true
+            sleep $((essai * 3))
+          done
+          echo "::error::impossible de consigner le rapport"
+          exit 1
+
+      - name: Signaler une anomalie
+        if: steps.bilan.outcome == 'failure'
+        run: echo "::warning::le bilan quotidien a signale une anomalie"
