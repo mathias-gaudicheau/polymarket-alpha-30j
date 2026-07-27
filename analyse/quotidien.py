@@ -189,6 +189,47 @@ def solder(positions, denouements):
 # Rapport
 # --------------------------------------------------------------------------
 
+def evaluer_alertes(gain_total, nb_executions, positions):
+    """Decide des alertes du jour, coupe-circuit compris.
+
+    Extrait dans une fonction a part pour etre testable : un coupe-circuit
+    qu'on n'a jamais vu se declencher n'est pas un coupe-circuit, c'est une
+    intention. Le test le force et verifie qu'il repond.
+    """
+    alertes = []
+
+    if gain_total <= -CAPITAL_INITIAL * SEUIL_COUPE_CIRCUIT:
+        alertes.append({
+            "gravite": "CRITIQUE",
+            "sujet": "coupe-circuit declenche : perte de %.2f $ sur %.0f $, soit "
+                     "%.1f %% du capital. Toutes les strategies passent en veille."
+                     % (-gain_total, CAPITAL_INITIAL,
+                        100 * abs(gain_total) / CAPITAL_INITIAL)})
+
+    if gain_total <= -CAPITAL_INITIAL * SEUIL_COUPE_CIRCUIT * 0.5:
+        alertes.append({
+            "gravite": "ALERTE",
+            "sujet": "perte superieure a la moitie du seuil de coupe-circuit"})
+
+    if not nb_executions:
+        alertes.append({
+            "gravite": "ALERTE",
+            "sujet": "aucune execution consignee : la collecte est-elle vivante"})
+
+    latences = sorted(p["latence"] for p in positions
+                      if p.get("latence") is not None and p["latence"] > 0)
+    if latences:
+        mediane = latences[len(latences) // 2]
+        if mediane > 900:
+            alertes.append({
+                "gravite": "ALERTE",
+                "sujet": "latence mediane de %d s entre signal et execution : la "
+                         "planification prend du retard et les occasions courtes "
+                         "deviennent hors d'atteinte" % mediane})
+
+    return alertes
+
+
 def _pourcent(x, defaut="-"):
     return defaut if x is None else "%+.2f %%" % (100 * x)
 
@@ -314,13 +355,7 @@ def main():
             for p in positions if p.get("t_execution")))),
     }
 
-    alertes = []
-    if gain_total < -CAPITAL_INITIAL * SEUIL_COUPE_CIRCUIT:
-        alertes.append({"gravite": "CRITIQUE",
-                        "sujet": "coupe-circuit : perte superieure a 20 %"})
-    if not executions:
-        alertes.append({"gravite": "ALERTE",
-                        "sujet": "aucune execution consignee, la collecte est-elle vivante"})
+    alertes = evaluer_alertes(gain_total, len(executions), positions)
 
     latences = sorted(p["latence"] for p in positions
                       if p.get("latence") is not None and p["latence"] > 0)
@@ -335,12 +370,6 @@ def main():
         diagnostic["latence mediane signal vers execution"] = (
             "%d s (min %d, max %d) — mesuree, non supposee"
             % (mediane, latences[0], latences[-1]))
-        if mediane > 900:
-            alertes.append({
-                "gravite": "ALERTE",
-                "sujet": "latence mediane de %d s : la planification GitHub prend "
-                         "du retard, les occasions courtes deviennent hors "
-                         "d'atteinte" % mediane})
 
     rapport = construire_rapport(resumes, capital, ouvertes, alertes, diagnostic)
     with open(os.path.join(RACINE, "RAPPORT.md"), "w", encoding="utf-8") as f:

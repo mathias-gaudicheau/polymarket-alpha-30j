@@ -20,3 +20,6 @@ jobs:
 
       - name: Moteur de decouverte
         run: python tests/test_fouille.py
+
+      - name: Garde-fous et coupe-circuit
+        run: python tests/test_garde_fous.py
