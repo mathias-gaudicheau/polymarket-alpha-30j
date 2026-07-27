@@ -3,10 +3,10 @@ name: Collecte
 on:
   workflow_dispatch:
   schedule:
-    # Toutes les 5 minutes, decale de 2 pour eviter la minute ronde ou tout
-    # le monde planifie ses taches. GitHub peut retarder l'execution sous
-    # charge : la cadence reelle est un plancher, pas une garantie.
-    - cron: "2-59/5 * * * *"
+    # Forme la plus standard possible : la planification de GitHub n'a pas
+    # demarre en 75 minutes avec une expression par plage, on ne prend plus
+    # le moindre risque de lecture.
+    - cron: "*/15 * * * *"
 
 permissions:
   contents: write
@@ -18,7 +18,13 @@ concurrency:
 jobs:
   collecter:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Chaque execution enchaine plusieurs cycles au lieu d'un seul. GitHub
+    # honore les planifications au mieux, avec des retards frequents et
+    # parfois des omissions : faire dependre la cadence de son horloge etait
+    # un point de fragilite unique. Un declenchement honore couvre desormais
+    # un quart d'heure entier, et l'intervalle de cinq minutes est tenu par
+    # notre propre chronometre.
+    timeout-minutes: 14
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,34 +34,41 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Executer le cycle
-        id: cycle
-        run: python collecte/cycle.py
-        continue-on-error: true
-
-      - name: Consigner le journal
+      - name: Enchainer les cycles
         run: |
           git config user.name  "collecteur"
           git config user.email "collecteur@users.noreply.github.com"
-          git add journal/
-          if git diff --cached --quiet; then
-            echo "rien a consigner"
-            exit 0
-          fi
-          git commit -q -m "journal $(date -u '+%Y-%m-%d %H:%M') UTC"
-          for essai in 1 2 3 4 5; do
-            if git push -q origin HEAD:main 2>/dev/null; then
-              echo "consigne (essai $essai)"
-              exit 0
-            fi
-            echo "push refuse, rebase et nouvelle tentative ($essai)"
-            git pull --rebase -q origin main || true
-            sleep $((essai * 3))
-          done
-          echo "::error::impossible de consigner le journal apres 5 essais"
-          exit 1
 
-      - name: Refleter l etat du cycle
-        if: steps.cycle.outcome == 'failure'
-        run: |
-          echo "::warning::le cycle a signale une anomalie, voir le journal ci-dessus"
+          consigner() {
+            git add journal/ 2>/dev/null || true
+            if git diff --cached --quiet; then
+              echo "   rien a consigner"
+              return 0
+            fi
+            git commit -q -m "journal $(date -u '+%Y-%m-%d %H:%M') UTC"
+            for essai in 1 2 3; do
+              if git push -q origin HEAD:main 2>/dev/null; then
+                echo "   consigne"
+                return 0
+              fi
+              git pull --rebase -q origin main || true
+              sleep $((essai * 3))
+            done
+            echo "::warning::consignation impossible, les donnees suivront au prochain cycle"
+            return 0
+          }
+
+          debut=$(date +%s)
+          for i in 1 2 3; do
+            echo "--- cycle $i/3 ---"
+            python collecte/cycle.py || echo "::warning::cycle $i en anomalie"
+            consigner
+            if [ "$i" -lt 3 ]; then
+              # On vise un pas de cinq minutes de bord a bord, en retirant le
+              # temps deja consomme : le rythme reste regulier meme quand un
+              # cycle traine.
+              cible=$((debut + i * 300))
+              reste=$((cible - $(date +%s)))
+              [ "$reste" -gt 0 ] && sleep "$reste"
+            fi
+          done
