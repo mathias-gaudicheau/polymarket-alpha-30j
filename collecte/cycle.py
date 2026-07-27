@@ -248,7 +248,7 @@ def main():
     print("=" * 70)
 
     # 1. Univers
-    marches, diag_univers = gamma.lire_univers(journal=note)
+    marches, evenements, diag_univers = gamma.lire_univers(journal=note)
     if not marches:
         print("ECHEC : univers vide, rien a faire. %s" % diag_univers)
         return 2
@@ -270,7 +270,8 @@ def main():
              % (diag_exec["nb"], diag_exec.get("realisees", 0)))
 
     # 3. Detection sur l'instantane du jour
-    signaux, diagnostics = incoherences.tous_les_detecteurs(marches, journal=note)
+    signaux, diagnostics = incoherences.tous_les_detecteurs(
+        marches, evenements, journal=note)
     signaux = [s for s in signaux if s.avantage_net() > 0]
     note("signaux retenus apres frais : %d" % len(signaux))
 

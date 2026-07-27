@@ -26,6 +26,17 @@ MARGE_ECHELLE = 0.010
 # executables ensemble de facon credible.
 JAMBES_MAXIMALES = 12
 
+# Ecart tolere entre la somme des prix moyens d'une partition et l'unite.
+# Un ensemble d'issues exclusives et exhaustives somme necessairement a un,
+# aux frottements pres. S'en eloigner trahit un groupe incomplet.
+TOLERANCE_PARTITION = 0.06
+
+# Garde-fou d'incredulite. Un gain sans risque de plus de six pour cent sur
+# un marche public serait ramasse en quelques secondes par des dizaines de
+# robots. En observer un signifie presque toujours que notre modele se trompe,
+# pas que le marche est genereux. On le consigne, on ne le joue pas.
+PLAFOND_GAIN_CREDIBLE = 0.06
+
 
 # --------------------------------------------------------------------------
 # Temoin de qualite : l'arbitrage OUI/NON ne doit jamais se declencher
@@ -56,7 +67,7 @@ def temoin_oui_non(marches) -> list:
 # Detecteur 2 : la somme d'un panier a issues exclusives
 # --------------------------------------------------------------------------
 
-def paniers_negrisk(marches, journal=None) -> list:
+def paniers_negrisk(evenements, journal=None) -> tuple:
     """Sur un evenement negRisk, exactement une issue se realise.
 
     Deux occasions symetriques :
@@ -66,21 +77,48 @@ def paniers_negrisk(marches, journal=None) -> list:
       somme des meilleurs achats  > 1  -> vendre tout le panier encaisse plus
                                           d'un dollar et n'en coute qu'un
 
-    La seconde est la plus frequente : c'est la marge que le marche s'octroie.
-    Vendre une issue revient a acheter son complement, ce que le moteur
-    d'execution traduira ensuite en jambes concretes.
-    """
-    groupes = {}
-    for m in marches:
-        if not m.get("neg_risk") or not m.get("neg_risk_id"):
-            continue
-        if not prix_negociables(m):
-            continue
-        groupes.setdefault(m["neg_risk_id"], []).append(m)
+    Tout repose sur un mot : *tout* le panier. Ce raisonnement n'a de sens que
+    si le groupe contient l'integralite des issues. Deux candidats sur
+    cinquante sommeront toujours a bien moins d'un dollar sans que cela ne
+    constitue le moindre arbitrage. Une premiere version de ce detecteur
+    filtrait les marches non cotables avant de constituer les groupes, ce qui
+    detruisait l'exhaustivite et fabriquait des occasions imaginaires a 17 %
+    de rendement pretendument garanti.
 
-    signaux = []
-    for cle, lot in groupes.items():
-        if len(lot) < 2 or len(lot) > JAMBES_MAXIMALES:
+    Trois verrous, donc, avant d'emettre quoi que ce soit :
+      - l'evenement doit etre complet, aucun marche perdu au filtrage
+      - toutes ses issues doivent etre cotables, sans exception
+      - la somme des prix moyens doit deja tourner autour de un, faute de
+        quoi le groupe n'est pas la partition qu'il pretend etre
+    """
+    signaux, ecartes = [], {"incomplet": 0, "issue_non_cotable": 0,
+                            "somme_implausible": 0, "gain_incroyable": 0,
+                            "trop_de_jambes": 0}
+
+    for ev in evenements:
+        if not ev.get("neg_risk"):
+            continue
+        lot = ev.get("marches") or []
+        if len(lot) < 2:
+            continue
+        if len(lot) > JAMBES_MAXIMALES:
+            ecartes["trop_de_jambes"] += 1
+            continue
+
+        # Verrou 1 : aucune issue n'a disparu au filtrage.
+        if not ev.get("complet"):
+            ecartes["incomplet"] += 1
+            continue
+
+        # Verrou 2 : toutes les issues sont cotables.
+        if not all(prix_negociables(m) for m in lot):
+            ecartes["issue_non_cotable"] += 1
+            continue
+
+        # Verrou 3 : la partition ressemble a une partition.
+        somme_milieux = sum((m["achat"] + m["vente"]) / 2.0 for m in lot)
+        if not (1.0 - TOLERANCE_PARTITION <= somme_milieux <= 1.0 + TOLERANCE_PARTITION):
+            ecartes["somme_implausible"] += 1
             continue
 
         somme_ventes = sum(m["vente"] for m in lot)
@@ -89,41 +127,52 @@ def paniers_negrisk(marches, journal=None) -> list:
         # Sous-cote : le panier complet s'achete pour moins d'un dollar.
         if somme_ventes < 1.0 - MARGE_PANIER:
             gain = 1.0 - somme_ventes
-            jambes = [
-                Jambe(m["id"], m["jeton_oui"], "achat", m["vente"],
-                      m["categorie"], m["taux_frais"],
-                      libelle=m.get("groupe_titre") or m.get("question"))
-                for m in lot
-            ]
-            signaux.append(Signal(
-                "c1_panier_sous_cote", jambes, gain,
-                "Somme des ventes = %.4f sur %d issues exclusives. Acheter le "
-                "panier entier coute %.4f $ et rapporte 1,00 $."
-                % (somme_ventes, len(lot), somme_ventes),
-                tout_ou_rien=True, gain_certain=gain,
-                marche_pivot=lot[0]["id"]))
+            if gain > PLAFOND_GAIN_CREDIBLE:
+                ecartes["gain_incroyable"] += 1
+            else:
+                jambes = [
+                    Jambe(m["id"], m["jeton_oui"], "achat", m["vente"],
+                          m["categorie"], m["taux_frais"],
+                          libelle=m.get("groupe_titre") or m.get("question"))
+                    for m in lot
+                ]
+                signaux.append(Signal(
+                    "c1_panier_sous_cote", jambes, gain,
+                    "Somme des ventes = %.4f sur les %d issues exclusives de "
+                    "l'evenement %s. Acheter le panier entier coute %.4f $ et "
+                    "rapporte exactement 1,00 $."
+                    % (somme_ventes, len(lot), ev.get("slug"), somme_ventes),
+                    tout_ou_rien=True, gain_certain=gain,
+                    marche_pivot=lot[0]["id"]))
 
         # Sur-cote : le panier complet se vend pour plus d'un dollar.
         if somme_achats > 1.0 + MARGE_PANIER:
             gain = somme_achats - 1.0
-            jambes = [
-                Jambe(m["id"], m["jeton_non"], "achat", round(1.0 - m["achat"], 6),
-                      m["categorie"], m["taux_frais"],
-                      libelle="NON " + (m.get("groupe_titre") or m.get("question") or ""))
-                for m in lot
-            ]
-            signaux.append(Signal(
-                "c1_panier_sur_cote", jambes, gain,
-                "Somme des achats = %.4f sur %d issues exclusives. Vendre le "
-                "panier entier encaisse %.4f $ pour un dollar a payer."
-                % (somme_achats, len(lot), somme_achats),
-                tout_ou_rien=True, gain_certain=gain,
-                marche_pivot=lot[0]["id"]))
+            if gain > PLAFOND_GAIN_CREDIBLE:
+                ecartes["gain_incroyable"] += 1
+            else:
+                jambes = [
+                    Jambe(m["id"], m["jeton_non"], "achat",
+                          round(1.0 - m["achat"], 6),
+                          m["categorie"], m["taux_frais"],
+                          libelle="NON " + (m.get("groupe_titre")
+                                            or m.get("question") or ""))
+                    for m in lot
+                ]
+                signaux.append(Signal(
+                    "c1_panier_sur_cote", jambes, gain,
+                    "Somme des achats = %.4f sur les %d issues exclusives de "
+                    "l'evenement %s. Vendre le panier entier encaisse %.4f $ "
+                    "pour un seul dollar a verser."
+                    % (somme_achats, len(lot), ev.get("slug"), somme_achats),
+                    tout_ou_rien=True, gain_certain=gain,
+                    marche_pivot=lot[0]["id"]))
 
     if journal:
-        journal("paniers negRisk : %d groupes examines, %d signaux"
-                % (len(groupes), len(signaux)))
-    return signaux
+        journal("paniers negRisk : %d signaux ; ecartes -> %s"
+                % (len(signaux), ", ".join("%s=%d" % kv for kv in ecartes.items()
+                                           if kv[1])))
+    return signaux, ecartes
 
 
 # --------------------------------------------------------------------------
@@ -173,7 +222,7 @@ def echelles_de_seuils(marches, journal=None) -> list:
             continue
         groupes.setdefault(m["evenement_id"], []).append(m)
 
-    signaux, examines = [], 0
+    signaux, examines, invraisemblables = [], 0, 0
     for _cle, lot in groupes.items():
         if len(lot) < 2:
             continue
@@ -194,6 +243,12 @@ def echelles_de_seuils(marches, journal=None) -> list:
             # le precedent.
             if bas["achat"] > haut["vente"] + MARGE_ECHELLE:
                 gain = bas["achat"] - haut["vente"]
+                if gain > PLAFOND_GAIN_CREDIBLE:
+                    # Une monotonie violee de plus de six points sur deux
+                    # marches reellement emboites n'existe pas : c'est notre
+                    # lecture du sens de l'echelle qui est fausse.
+                    invraisemblables += 1
+                    continue
                 jambes = [
                     Jambe(haut["id"], haut["jeton_oui"], "achat", haut["vente"],
                           haut["categorie"], haut["taux_frais"],
@@ -213,8 +268,9 @@ def echelles_de_seuils(marches, journal=None) -> list:
                     marche_pivot=haut["id"]))
 
     if journal:
-        journal("echelles de seuils : %d echelles lisibles, %d signaux"
-                % (examines, len(signaux)))
+        journal("echelles de seuils : %d echelles lisibles, %d signaux, "
+                "%d ecarts juges invraisemblables"
+                % (examines, len(signaux), invraisemblables))
     return signaux
 
 
@@ -270,18 +326,20 @@ def tranches_aberrantes(marches, journal=None) -> list:
     return signaux
 
 
-def tous_les_detecteurs(marches, journal=None):
+def tous_les_detecteurs(marches, evenements, journal=None):
     """Passe l'univers dans toute la couche 1.
 
     Renvoie (signaux, diagnostics). Les diagnostics ne sont pas des occasions
     mais des indicateurs de sante des donnees, a surveiller au point d'etape.
     """
     signaux = []
-    signaux.extend(paniers_negrisk(marches, journal))
+    paniers, ecartes_paniers = paniers_negrisk(evenements, journal)
+    signaux.extend(paniers)
     signaux.extend(echelles_de_seuils(marches, journal))
 
     diagnostics = {
         "carnets_croises": temoin_oui_non(marches),
         "densites_negatives": tranches_aberrantes(marches, journal),
+        "paniers_ecartes": ecartes_paniers,
     }
     return signaux, diagnostics

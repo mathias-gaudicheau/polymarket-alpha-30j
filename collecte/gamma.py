@@ -80,6 +80,14 @@ def normaliser(brut: dict, evenement=None) -> dict | None:
     if len(jetons) < 2 or not brut.get("enableOrderBook"):
         return None
 
+    # Un evenement ouvert contient aussi ses marches deja clotures. Leurs prix
+    # sont figes a 0 ou 1 et fabriqueraient des incoherences imaginaires : on
+    # les ecarte ici, au plus pres de la source.
+    if brut.get("closed") or brut.get("archived"):
+        return None
+    if brut.get("active") is False or brut.get("acceptingOrders") is False:
+        return None
+
     issues = _json_ou_liste(brut.get("outcomes"))
     prix_issues = [_flottant(p) for p in _json_ou_liste(brut.get("outcomePrices"))]
 
@@ -146,7 +154,7 @@ def lire_univers(inclure_clos=False, journal=None) -> tuple:
     etiquettes et fait facturer tout l'univers au taux le plus cher, ce qui
     condamnerait a tort la quasi-totalite des occasions.
     """
-    marches, decalage, pages = [], 0, 0
+    marches, evenements, decalage, pages = [], [], 0, 0
     rejetes_sans_carnet = 0
     echecs = []
     evenements_lus = 0
@@ -172,12 +180,29 @@ def lire_univers(inclure_clos=False, journal=None) -> tuple:
 
         for ev in rep.donnees:
             evenements_lus += 1
-            for brut in ev.get("markets") or []:
+            bruts = ev.get("markets") or []
+            retenus = []
+            for brut in bruts:
                 enr = normaliser(brut, evenement=ev)
                 if enr is None:
                     rejetes_sans_carnet += 1
                 else:
+                    retenus.append(enr)
                     marches.append(enr)
+            if retenus:
+                evenements.append({
+                    "id": str(ev.get("id")),
+                    "slug": ev.get("slug"),
+                    "titre": ev.get("title"),
+                    "neg_risk": bool(ev.get("negRisk") or ev.get("enableNegRisk")),
+                    "etiquettes": [t.get("slug") for t in (ev.get("tags") or [])
+                                   if isinstance(t, dict)],
+                    # Decisif pour l'exhaustivite : combien de marches
+                    # l'evenement portait, et combien ont survecu au filtrage.
+                    "marches_annonces": len(bruts),
+                    "marches": retenus,
+                    "complet": len(retenus) == len(bruts),
+                })
 
         pages += 1
         if len(rep.donnees) < PAS_PAGE:
@@ -193,9 +218,12 @@ def lire_univers(inclure_clos=False, journal=None) -> tuple:
         uniques.append(m)
 
     connues = sum(1 for m in uniques if m["categorie"] != "inconnu")
+    complets = sum(1 for e in evenements if e["complet"])
     diagnostic = {
         "pages_lues": pages,
         "evenements_lus": evenements_lus,
+        "evenements_retenus": len(evenements),
+        "evenements_complets": complets,
         "marches_retenus": len(uniques),
         "doublons_ecartes": len(marches) - len(uniques),
         "rejetes_sans_carnet": rejetes_sans_carnet,
@@ -205,11 +233,13 @@ def lire_univers(inclure_clos=False, journal=None) -> tuple:
         "pagination_tronquee": pages >= PLAFOND_PAGES,
     }
     if journal:
-        journal("univers : %d marches sur %d evenements, %d ecartes, "
-                "categorie resolue pour %d (%.0f%%)"
+        journal("univers : %d marches negociables sur %d evenements lus, "
+                "%d ecartes (clos ou sans carnet), categorie resolue a %.0f%%"
                 % (len(uniques), evenements_lus, rejetes_sans_carnet,
-                   connues, 100 * diagnostic["taux_categorie_resolue"]))
-    return uniques, diagnostic
+                   100 * diagnostic["taux_categorie_resolue"]))
+        journal("evenements exploitables : %d, dont %d complets"
+                % (len(evenements), complets))
+    return uniques, evenements, diagnostic
 
 
 def grouper_par_evenement(marches) -> dict:
