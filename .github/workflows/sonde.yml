@@ -1,0 +1,26 @@
+name: Sonde des sources
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sonder:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Interroger les sources
+        run: python sonde/sonde.py
+
+      - name: Conserver le resultat complet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonde-resultat
+          path: sonde-resultat.json
+          retention-days: 30
