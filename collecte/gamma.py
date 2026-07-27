@@ -144,8 +144,13 @@ def lire_univers(inclure_clos=False, journal=None) -> tuple:
         }, essais=3)
 
         if not rep.ok:
-            echecs.append({"decalage": decalage, "erreur": rep.erreur,
-                           "statut": rep.statut})
+            # Gamma refuse les decalages au-dela de l'univers avec un 422
+            # explicite. Ce n'est pas une panne : c'est la fin de la liste.
+            fin_normale = (rep.statut == 422
+                           and "offset too large" in (rep.erreur or ""))
+            if not fin_normale:
+                echecs.append({"decalage": decalage, "erreur": rep.erreur,
+                               "statut": rep.statut})
             break
         if not isinstance(rep.donnees, list) or not rep.donnees:
             break
