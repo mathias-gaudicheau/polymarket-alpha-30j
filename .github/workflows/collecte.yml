@@ -1,0 +1,61 @@
+name: Collecte
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Toutes les 5 minutes, decale de 2 pour eviter la minute ronde ou tout
+    # le monde planifie ses taches. GitHub peut retarder l'execution sous
+    # charge : la cadence reelle est un plancher, pas une garantie.
+    - cron: "2-59/5 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: collecte
+  cancel-in-progress: false
+
+jobs:
+  collecter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Executer le cycle
+        id: cycle
+        run: python collecte/cycle.py
+        continue-on-error: true
+
+      - name: Consigner le journal
+        run: |
+          git config user.name  "collecteur"
+          git config user.email "collecteur@users.noreply.github.com"
+          git add journal/
+          if git diff --cached --quiet; then
+            echo "rien a consigner"
+            exit 0
+          fi
+          git commit -q -m "journal $(date -u '+%Y-%m-%d %H:%M') UTC"
+          for essai in 1 2 3 4 5; do
+            if git push -q origin HEAD:main 2>/dev/null; then
+              echo "consigne (essai $essai)"
+              exit 0
+            fi
+            echo "push refuse, rebase et nouvelle tentative ($essai)"
+            git pull --rebase -q origin main || true
+            sleep $((essai * 3))
+          done
+          echo "::error::impossible de consigner le journal apres 5 essais"
+          exit 1
+
+      - name: Refleter l etat du cycle
+        if: steps.cycle.outcome == 'failure'
+        run: |
+          echo "::warning::le cycle a signale une anomalie, voir le journal ci-dessus"
