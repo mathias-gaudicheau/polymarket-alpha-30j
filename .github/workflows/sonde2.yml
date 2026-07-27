@@ -1,0 +1,26 @@
+name: Sonde 2 - dimensionnement
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sonder:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Mesurer les limites reelles
+        run: python sonde/sonde2.py
+
+      - name: Conserver le resultat complet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonde2-resultat
+          path: sonde2-resultat.json
+          retention-days: 30
