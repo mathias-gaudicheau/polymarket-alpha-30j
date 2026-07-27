@@ -27,7 +27,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from collecte import gamma, journal  # noqa: E402
-from detecteurs import incoherences  # noqa: E402
+from collecte.references import appariement, deribit  # noqa: E402
+from detecteurs import incoherences, references  # noqa: E402
 from moteur.execution import Carnet, executer_preneur  # noqa: E402
 from outils.commun import force_utf8, http_json, maintenant_iso  # noqa: E402
 
@@ -284,9 +285,29 @@ def main():
         note("executions : %d tentees, %d realisees"
              % (diag_exec["nb"], diag_exec.get("realisees", 0)))
 
-    # 3. Detection sur l'instantane du jour
+    # 3. Couche 1 : incoherences arithmetiques internes
     signaux, diagnostics = incoherences.tous_les_detecteurs(
         marches, evenements, journal=note)
+
+    # 4. Couche 2 : confrontation aux marches plus efficients
+    diag_refs = {}
+    try:
+        surfaces = deribit.charger_toutes(journal=note)
+        if surfaces:
+            appariements, diag_app = appariement.apparier_crypto(
+                marches, surfaces, journal=note)
+            diag_refs["crypto"] = diag_app
+            if appariements:
+                sig_ref, diag_sig = references.signaux_de_reference(
+                    appariements, poids_par_source=None, journal=note)
+                signaux.extend(sig_ref)
+                diag_refs["signaux"] = diag_sig["rejets"]
+    except Exception as err:  # noqa: BLE001
+        # Une reference externe muette ne doit jamais interrompre la collecte :
+        # les instantanes valent d'etre conserves meme sans elle.
+        note("couche 2 indisponible ce cycle : %s: %s" % (type(err).__name__, err))
+        diag_refs["erreur"] = str(err)[:200]
+
     signaux = [s for s in signaux if s.avantage_net() > 0]
     note("signaux retenus apres frais : %d" % len(signaux))
 
@@ -311,6 +332,8 @@ def main():
         "execution": diag_exec,
         "carnets_croises": len(diagnostics["carnets_croises"]),
         "densites_negatives": len(diagnostics["densites_negatives"]),
+        "paniers_ecartes": diagnostics.get("paniers_ecartes"),
+        "references": diag_refs,
         "journal": diag_journal,
     }, horodatage)
 
