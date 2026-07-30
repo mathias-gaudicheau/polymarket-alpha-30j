@@ -1,6 +1,6 @@
 # Rapport de l'expérience
 
-_Généré automatiquement le 30/07/2026 à 18h00 (16h00 UTC). Capital virtuel, aucune transaction réelle._
+_Généré automatiquement le 30/07/2026 à 23h01 (21h01 UTC). Capital virtuel, aucune transaction réelle._
 
 ## Où en est le capital
 
@@ -9,7 +9,7 @@ _Généré automatiquement le 30/07/2026 à 18h00 (16h00 UTC). Capital virtuel, 
 | Capital de départ | 500.00 $ |
 | Capital actuel | 500.00 $ |
 | Résultat cumulé | +0.00 $ (+0.00 %) |
-| Positions encore ouvertes | 37783 |
+| Positions encore ouvertes | 40632 |
 | Jour de l'expérience | 4 sur 30 |
 
 ## Ce que vaut chaque stratégie
@@ -24,10 +24,10 @@ qui aurait l'air d'en être un.
 
 ## Santé du dispositif
 
-- executions lues : 32606
-- latence mediane signal vers execution : 303 s (min 50, max 1627) — mesuree, non supposee
+- executions lues : 35114
+- latence mediane signal vers execution : 304 s (min 50, max 1627) — mesuree, non supposee
 - positions denouees : 0
-- positions ouvertes : 37783
+- positions ouvertes : 40632
 - temoins denoues : 0
 
 ---
